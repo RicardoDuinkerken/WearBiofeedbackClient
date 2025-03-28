@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -46,6 +48,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun WearApp() {
     WearBiofeedbackClientTheme {
+        val connectionState = remember { mutableStateOf(ConnectionState.CONNECTING) }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -53,7 +57,7 @@ fun WearApp() {
             contentAlignment = Alignment.Center
         ) {
             TimeText()
-            MessageText(message = "Connecting...")
+            ConnectionText(state = connectionState.value)
             LaunchedEffect(Unit) {
                 withContext(Dispatchers.IO) {
                     while (true){
@@ -61,13 +65,37 @@ fun WearApp() {
                             unityHost = "10.10.20.103", // your Unity IP
                             unityPort = 7474,
                             deviceId = "Watch_001"
-                        )
+                        ){ state ->
+                            connectionState.value = state
+                        }
                         client.start()
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+fun ConnectionText(state: ConnectionState) {
+    val color = when (state) {
+        ConnectionState.CONNECTING -> MaterialTheme.colors.secondary
+        ConnectionState.CONNECTED -> MaterialTheme.colors.primary
+        ConnectionState.RECONNECTING -> MaterialTheme.colors.error
+    }
+
+    val text = when (state) {
+        ConnectionState.CONNECTING -> "Connecting..."
+        ConnectionState.CONNECTED -> "Connected!"
+        ConnectionState.RECONNECTING -> "Reconnecting..."
+    }
+
+    Text(
+        modifier = Modifier.fillMaxWidth(),
+        textAlign = TextAlign.Center,
+        color = color,
+        text = text
+    )
 }
 
 @Composable

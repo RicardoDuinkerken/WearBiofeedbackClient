@@ -12,7 +12,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 class SocketClient(
     private val unityHost: String,
     private val unityPort: Int,
-    private val deviceId: String
+    private val deviceId: String,
+    private val onStateChange: (ConnectionState) -> Unit
 ) {
     private var socket: Socket? = null
     private var output = socket?.getOutputStream()
@@ -28,6 +29,7 @@ class SocketClient(
 
         do {
             try {
+                onStateChange(ConnectionState.CONNECTING)
                 Log.d(TAG, "Attempting to connect to $unityHost:$unityPort")
                 socket = Socket(unityHost, unityPort)
                 input = socket?.getInputStream()
@@ -53,6 +55,7 @@ class SocketClient(
                     continue
                 }
 
+                onStateChange(ConnectionState.CONNECTED)
                 Log.d(TAG, "Handshake success acknowledged by Unity")
 
                 coroutineScope {
@@ -72,6 +75,7 @@ class SocketClient(
                 Log.e(TAG, "Socket error: ${e.message}", e)
             } finally {
                 close()
+                onStateChange(ConnectionState.RECONNECTING)
                 Log.d(TAG, "Retrying in 3 seconds...")
                 delay(3000)
             }
