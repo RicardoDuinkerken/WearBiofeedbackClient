@@ -22,6 +22,7 @@ class SocketClient(
 
     private val isStreaming = AtomicBoolean(false)
     private val running = AtomicBoolean(false)
+    private var wasEverConnected = false
 
     suspend fun start() {
         if (running.get()) return  // prevent multiple starts
@@ -29,7 +30,12 @@ class SocketClient(
 
         do {
             try {
-                onStateChange(ConnectionState.CONNECTING)
+                if (wasEverConnected) {
+                    onStateChange(ConnectionState.RECONNECTING)
+                } else {
+                    onStateChange(ConnectionState.CONNECTING)
+                }
+
                 Log.d(TAG, "Attempting to connect to $unityHost:$unityPort")
                 socket = Socket(unityHost, unityPort)
                 input = socket?.getInputStream()
@@ -55,6 +61,7 @@ class SocketClient(
                     continue
                 }
 
+                wasEverConnected = true
                 onStateChange(ConnectionState.CONNECTED)
                 Log.d(TAG, "Handshake success acknowledged by Unity")
 
@@ -75,7 +82,6 @@ class SocketClient(
                 Log.e(TAG, "Socket error: ${e.message}", e)
             } finally {
                 close()
-                onStateChange(ConnectionState.RECONNECTING)
                 Log.d(TAG, "Retrying in 3 seconds...")
                 delay(3000)
             }
@@ -167,5 +173,3 @@ class SocketClient(
         }
     }
 }
-
-

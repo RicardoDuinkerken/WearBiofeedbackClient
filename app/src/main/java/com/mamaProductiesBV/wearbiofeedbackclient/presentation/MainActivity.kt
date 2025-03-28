@@ -6,6 +6,7 @@
 package com.mamaProductiesBV.wearbiofeedbackclient.presentation
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
@@ -32,21 +33,27 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
+    private var socketClient: SocketClient? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
-
         super.onCreate(savedInstanceState)
-
         setTheme(android.R.style.Theme_DeviceDefault)
 
         setContent {
-            WearApp()
+            WearApp(onClientReady = { socketClient = it })
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        Log.d("MainActivity", "onDestroy() called — stopping socket")
+        socketClient?.stop()
     }
 }
 
 @Composable
-fun WearApp() {
+fun WearApp(onClientReady: (SocketClient) -> Unit) {
     WearBiofeedbackClientTheme {
         val connectionState = remember { mutableStateOf(ConnectionState.CONNECTING) }
 
@@ -57,18 +64,22 @@ fun WearApp() {
             contentAlignment = Alignment.Center
         ) {
             TimeText()
-            ConnectionText(state = connectionState.value)
+
+            MessageText(state = connectionState.value)
+
             LaunchedEffect(Unit) {
                 withContext(Dispatchers.IO) {
-                    while (true){
+                    while (true) {
                         val client = SocketClient(
-                            unityHost = "10.10.20.103", // your Unity IP
+                            unityHost = "10.10.20.103",
                             unityPort = 7474,
                             deviceId = "Watch_001"
-                        ){ state ->
+                        ) { state ->
                             connectionState.value = state
                         }
+                        onClientReady(client)
                         client.start()
+                        kotlinx.coroutines.delay(1000)
                     }
                 }
             }
@@ -77,7 +88,7 @@ fun WearApp() {
 }
 
 @Composable
-fun ConnectionText(state: ConnectionState) {
+fun MessageText(state: ConnectionState) {
     val color = when (state) {
         ConnectionState.CONNECTING -> MaterialTheme.colors.secondary
         ConnectionState.CONNECTED -> MaterialTheme.colors.primary
@@ -98,18 +109,8 @@ fun ConnectionText(state: ConnectionState) {
     )
 }
 
-@Composable
-fun MessageText(message: String) {
-    Text(
-        modifier = Modifier.fillMaxWidth(),
-        textAlign = TextAlign.Center,
-        color = MaterialTheme.colors.primary,
-        text = stringResource(R.string.hello_world, message)
-    )
-}
-
 @Preview(device = WearDevices.SMALL_ROUND, showSystemUi = true)
 @Composable
 fun DefaultPreview() {
-    WearApp()
+    WearApp(onClientReady = {})
 }
