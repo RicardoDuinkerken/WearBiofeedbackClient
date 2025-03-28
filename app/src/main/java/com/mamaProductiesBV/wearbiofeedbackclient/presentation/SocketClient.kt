@@ -7,6 +7,7 @@ import java.net.Socket
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.time.Instant
+import java.util.LinkedList
 import java.util.concurrent.atomic.AtomicBoolean
 
 class SocketClient(
@@ -42,20 +43,45 @@ class SocketClient(
                 output = socket?.getOutputStream()
                 Log.d(TAG, "Connected to Unity")
 
-                val buffer = ByteArray(1024)
-
                 // Send handshake
                 val handshakeJson = """{"type":"handshake","deviceId":"$deviceId"}""".trim() + "\n"
                 output?.write(handshakeJson.toByteArray())
                 Log.d(TAG, "Sent handshake JSON immediately after connect")
 
-                // Wait for handshake response
-                val responseLen = input?.read(buffer) ?: 0
-                val response = String(buffer, 0, responseLen).trim()
-                Log.d(TAG, "Got handshake response: $response")
+                // Wait for handshake success message
+                val buffer = ByteArray(1024)
+                val messageQueue = LinkedList<String>()
+                var handshakeComplete = false
 
-                if (!response.contains("handshake_success")) {
-                    Log.w(TAG, "Handshake failed or not acknowledged")
+                withContext(Dispatchers.IO) {
+                    val timeoutMillis = 3000L
+                    val startTime = System.currentTimeMillis()
+                    while (!handshakeComplete && System.currentTimeMillis() - startTime < timeoutMillis) {
+                        val len = input?.read(buffer) ?: break
+                        if (len == -1) break
+
+                        val incoming = String(buffer, 0, len).trim()
+                        Log.d(TAG, "Got handshake response chunk: $incoming")
+
+                        for (line in incoming.split("\n")) {
+                            val msg = line.trim()
+                            try {
+                                val json = JSONObject(msg)
+                                val type = json.optString("type", "").lowercase()
+                                if (type == "handshake_success") {
+                                    handshakeComplete = true
+                                } else {
+                                    messageQueue.add(msg)
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to parse handshake JSON: $msg", e)
+                            }
+                        }
+                    }
+                }
+
+                if (!handshakeComplete) {
+                    Log.w(TAG, "Handshake failed or timed out")
                     close()
                     delay(3000)
                     continue
@@ -66,7 +92,7 @@ class SocketClient(
                 Log.d(TAG, "Handshake success acknowledged by Unity")
 
                 coroutineScope {
-                    val listenerJob = launch { listenForCommands() }
+                    val listenerJob = launch { listenForCommands(messageQueue) }
                     val streamerJob = launch { streamHeartRateLoop() }
 
                     try {
@@ -94,9 +120,16 @@ class SocketClient(
         Log.d(TAG, "Client stopped by user")
     }
 
-    private suspend fun listenForCommands() {
+    private suspend fun listenForCommands(preloadedMessages: LinkedList<String>? = null) {
         try {
             val buffer = ByteArray(1024)
+
+            // Handle messages received during handshake
+            preloadedMessages?.forEach { msg ->
+                handleCommand(msg)
+            }
+            preloadedMessages?.clear()
+
             while (true) {
                 val len = input?.read(buffer) ?: -1
                 if (len == -1) break
@@ -106,24 +139,7 @@ class SocketClient(
 
                 for (line in incoming.split("\n")) {
                     val msg = line.trim()
-                    try {
-                        val json = JSONObject(msg)
-                        val type = json.optString("type", "").lowercase()
-
-                        when (type) {
-                            "start" -> {
-                                isStreaming.set(true)
-                                Log.d(TAG, "Streaming ENABLED by Unity")
-                            }
-                            "stop" -> {
-                                isStreaming.set(false)
-                                Log.d(TAG, "Streaming DISABLED by Unity")
-                            }
-                            else -> Log.d(TAG, "Unknown command: $type")
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to parse message: $msg", e)
-                    }
+                    handleCommand(msg)
                 }
             }
         } catch (e: Exception) {
@@ -131,6 +147,27 @@ class SocketClient(
         } finally {
             Log.d(TAG, "Listener ending, closing socket")
             close()
+        }
+    }
+
+    private fun handleCommand(msg: String) {
+        try {
+            val json = JSONObject(msg)
+            val type = json.optString("type", "").lowercase()
+
+            when (type) {
+                "start" -> {
+                    isStreaming.set(true)
+                    Log.d(TAG, "Streaming ENABLED by Unity")
+                }
+                "stop" -> {
+                    isStreaming.set(false)
+                    Log.d(TAG, "Streaming DISABLED by Unity")
+                }
+                else -> Log.d(TAG, "Unknown command: $type")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse message: $msg", e)
         }
     }
 
