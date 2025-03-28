@@ -26,6 +26,8 @@ import androidx.wear.compose.material.TimeText
 import androidx.wear.tooling.preview.devices.WearDevices
 import com.mamaProductiesBV.wearbiofeedbackclient.R
 import com.mamaProductiesBV.wearbiofeedbackclient.presentation.theme.WearBiofeedbackClientTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -53,12 +55,16 @@ fun WearApp() {
             TimeText()
             MessageText(message = "Connecting...")
             LaunchedEffect(Unit) {
-                val client = SocketClient(
-                    unityHost = "10.10.20.103", // your Unity IP
-                    unityPort = 7474,
-                    deviceId = "Watch_001"
-                )
-                client.start()
+                withContext(Dispatchers.IO) {
+                    while (true){
+                        val client = SocketClient(
+                            unityHost = "10.10.20.103", // your Unity IP
+                            unityPort = 7474,
+                            deviceId = "Watch_001"
+                        )
+                        client.start()
+                    }
+                }
             }
         }
     }
