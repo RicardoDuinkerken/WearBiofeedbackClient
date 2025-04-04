@@ -60,6 +60,16 @@ class MainActivity : ComponentActivity() {
         socketClient?.stop()
         discoveryJob?.cancel()
     }
+
+    override fun onResume() {
+        super.onResume()
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
 }
 
 @Composable
