@@ -18,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -30,10 +31,15 @@ import androidx.wear.tooling.preview.devices.WearDevices
 import com.mamaProductiesBV.wearbiofeedbackclient.R
 import com.mamaProductiesBV.wearbiofeedbackclient.presentation.theme.WearBiofeedbackClientTheme
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private var socketClient: SocketClient? = null
+    private var discoveryJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
@@ -41,7 +47,10 @@ class MainActivity : ComponentActivity() {
         setTheme(android.R.style.Theme_DeviceDefault)
 
         setContent {
-            WearApp(onClientReady = { socketClient = it })
+            WearApp(
+                onClientReady = { socketClient = it },
+                registerDiscoveryJob = { discoveryJob = it }
+            )
         }
     }
 
@@ -49,11 +58,15 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         Log.d("MainActivity", "onDestroy() called — stopping socket")
         socketClient?.stop()
+        discoveryJob?.cancel()
     }
 }
 
 @Composable
-fun WearApp(onClientReady: (SocketClient) -> Unit) {
+fun WearApp(
+    onClientReady: (SocketClient) -> Unit,
+    registerDiscoveryJob: (Job) -> Unit
+) {
     WearBiofeedbackClientTheme {
         val connectionState = remember { mutableStateOf(ConnectionState.CONNECTING) }
 
@@ -64,24 +77,37 @@ fun WearApp(onClientReady: (SocketClient) -> Unit) {
             contentAlignment = Alignment.Center
         ) {
             TimeText()
-
             MessageText(state = connectionState.value)
 
+            val coroutineScope = rememberCoroutineScope()
+
             LaunchedEffect(Unit) {
-                withContext(Dispatchers.IO) {
-                    while (true) {
+                val job = coroutineScope.launch(Dispatchers.IO) {
+                    var serverInfo: Pair<String, Int>? = null
+
+                    while (isActive && serverInfo == null) {
+                        serverInfo = DiscoveryHelper.listenForServerBroadcast()
+                        if (serverInfo == null) {
+                            Log.d("WearApp", "No server found, retrying in 5 seconds...")
+                            delay(5000)
+                        }
+                    }
+
+                    if (serverInfo != null && isActive) {
+                        val (host, port) = serverInfo
                         val client = SocketClient(
-                            unityHost = "10.10.20.103",
-                            unityPort = 7474,
+                            unityHost = host,
+                            unityPort = port,
                             deviceId = "Watch_001"
                         ) { state ->
                             connectionState.value = state
                         }
                         onClientReady(client)
                         client.start()
-                        kotlinx.coroutines.delay(1000)
                     }
                 }
+
+                registerDiscoveryJob(job)
             }
         }
     }
@@ -112,5 +138,5 @@ fun MessageText(state: ConnectionState) {
 @Preview(device = WearDevices.SMALL_ROUND, showSystemUi = true)
 @Composable
 fun DefaultPreview() {
-    WearApp(onClientReady = {})
+    WearApp(onClientReady = {}, registerDiscoveryJob = {})
 }
