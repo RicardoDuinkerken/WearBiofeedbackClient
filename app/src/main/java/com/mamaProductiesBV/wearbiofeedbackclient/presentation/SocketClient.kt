@@ -1,5 +1,6 @@
 package com.mamaProductiesBV.wearbiofeedbackclient.presentation
 
+import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.*
 import org.json.JSONObject
@@ -14,6 +15,7 @@ class SocketClient(
     private val unityHost: String,
     private val unityPort: Int,
     private val deviceId: String,
+    private val context: Context,
     private val onStateChange: (ConnectionState) -> Unit
 ) {
     private var socket: Socket? = null
@@ -24,18 +26,17 @@ class SocketClient(
     private val isStreaming = AtomicBoolean(false)
     private val running = AtomicBoolean(false)
     private var wasEverConnected = false
+    private lateinit var heartRateSensorManager: HeartRateSensorManager
 
     suspend fun start() {
-        if (running.get()) return  // prevent multiple starts
+        if (running.get()) return
         running.set(true)
 
         do {
             try {
-                if (wasEverConnected) {
-                    onStateChange(ConnectionState.RECONNECTING)
-                } else {
-                    onStateChange(ConnectionState.CONNECTING)
-                }
+                onStateChange(
+                    if (wasEverConnected) ConnectionState.RECONNECTING else ConnectionState.CONNECTING
+                )
 
                 Log.d(TAG, "Attempting to connect to $unityHost:$unityPort")
                 socket = Socket(unityHost, unityPort)
@@ -43,12 +44,14 @@ class SocketClient(
                 output = socket?.getOutputStream()
                 Log.d(TAG, "Connected to Unity")
 
-                // Send handshake
-                val handshakeJson = """{"type":"handshake","deviceId":"$deviceId"}""".trim() + "\n"
+                val handshakeJson = JSONObject().apply {
+                    put("type", "handshake")
+                    put("deviceId", deviceId)
+                }.toString() + "\n"
+                
                 output?.write(handshakeJson.toByteArray())
-                Log.d(TAG, "Sent handshake JSON immediately after connect")
+                Log.d(TAG, "Sent handshake JSON")
 
-                // Wait for handshake success message
                 val buffer = ByteArray(1024)
                 val messageQueue = LinkedList<String>()
                 var handshakeComplete = false
@@ -67,8 +70,7 @@ class SocketClient(
                             val msg = line.trim()
                             try {
                                 val json = JSONObject(msg)
-                                val type = json.optString("type", "").lowercase()
-                                if (type == "handshake_success") {
+                                if (json.optString("type", "").lowercase() == "handshake_success") {
                                     handshakeComplete = true
                                 } else {
                                     messageQueue.add(msg)
@@ -91,14 +93,16 @@ class SocketClient(
                 onStateChange(ConnectionState.CONNECTED)
                 Log.d(TAG, "Handshake success acknowledged by Unity")
 
+                heartRateSensorManager = HeartRateSensorManager(context)
+
                 coroutineScope {
                     val listenerJob = launch { listenForCommands(messageQueue) }
-                    val streamerJob = launch { streamHeartRateLoop() }
+                    val streamJob = launch { streamData() }
 
                     try {
                         listenerJob.join()
                     } finally {
-                        streamerJob.cancelAndJoin()
+                        streamJob.cancelAndJoin()
                     }
                 }
 
@@ -124,10 +128,7 @@ class SocketClient(
         try {
             val buffer = ByteArray(1024)
 
-            // Handle messages received during handshake
-            preloadedMessages?.forEach { msg ->
-                handleCommand(msg)
-            }
+            preloadedMessages?.forEach { msg -> handleCommand(msg) }
             preloadedMessages?.clear()
 
             while (true) {
@@ -153,9 +154,7 @@ class SocketClient(
     private fun handleCommand(msg: String) {
         try {
             val json = JSONObject(msg)
-            val type = json.optString("type", "").lowercase()
-
-            when (type) {
+            when (json.optString("type", "").lowercase()) {
                 "start" -> {
                     isStreaming.set(true)
                     Log.d(TAG, "Streaming ENABLED by Unity")
@@ -164,37 +163,42 @@ class SocketClient(
                     isStreaming.set(false)
                     Log.d(TAG, "Streaming DISABLED by Unity")
                 }
-                else -> Log.d(TAG, "Unknown command: $type")
+                else -> Log.d(TAG, "Unknown command: ${json.optString("type")}")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to parse message: $msg", e)
         }
     }
 
-    private suspend fun streamHeartRateLoop() {
-        try {
-            while (true) {
+    private suspend fun streamData() = coroutineScope {
+        launch {
+            heartRateSensorManager.streamHeartRate().collect { (hr, ts) ->
                 if (isStreaming.get()) {
-                    val hr = 65 + (0..10).random()
-                    val timestamp = Instant.now().toString()
-                    val hrJson = JSONObject().apply {
+                    val json = JSONObject().apply {
                         put("type", "heartrate")
                         put("deviceId", deviceId)
                         put("heartRate", hr)
-                        put("timestamp", timestamp)
+                        put("timestamp", ts)
                     }.toString() + "\n"
-
-                    Log.d(TAG, "Sending HR JSON: $hrJson")
-                    output?.write(hrJson.toByteArray())
-                    Log.d(TAG, "HR message sent")
+                    output?.write(json.toByteArray())
+                    Log.d(TAG, "Sent HR: $json")
                 }
-                delay(1000)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error while streaming HR: ${e.message}", e)
-        } finally {
-            Log.d(TAG, "Streamer ending, closing socket")
-            close()
+        }
+
+        launch {
+            heartRateSensorManager.streamHeartRateVariability().collect { (hrv, ts) ->
+                if (isStreaming.get()) {
+                    val json = JSONObject().apply {
+                        put("type", "hrv")
+                        put("deviceId", deviceId)
+                        put("hrv", hrv)
+                        put("timestamp", ts)
+                    }.toString() + "\n"
+                    output?.write(json.toByteArray())
+                    Log.d(TAG, "Sent HRV: $json")
+                }
+            }
         }
     }
 

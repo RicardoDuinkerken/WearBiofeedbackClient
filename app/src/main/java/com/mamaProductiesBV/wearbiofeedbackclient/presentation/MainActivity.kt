@@ -5,52 +5,68 @@
 
 package com.mamaProductiesBV.wearbiofeedbackclient.presentation
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
 import androidx.wear.compose.material.TimeText
 import androidx.wear.tooling.preview.devices.WearDevices
-import com.mamaProductiesBV.wearbiofeedbackclient.R
 import com.mamaProductiesBV.wearbiofeedbackclient.presentation.theme.WearBiofeedbackClientTheme
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
 
 class MainActivity : ComponentActivity() {
     private var socketClient: SocketClient? = null
     private var discoveryJob: Job? = null
+
+    private val requestSensorPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            Log.d("Permissions", "BODY_SENSORS permission granted")
+        } else {
+            Log.w("Permissions", "BODY_SENSORS permission denied — HR will not stream")
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
         setTheme(android.R.style.Theme_DeviceDefault)
 
+        requestSensorPermission() //Launch permission request early
+
         setContent {
             WearApp(
                 onClientReady = { socketClient = it },
                 registerDiscoveryJob = { discoveryJob = it }
             )
+        }
+    }
+
+    private fun requestSensorPermission() {
+        val permission = Manifest.permission.BODY_SENSORS
+        if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
+            requestSensorPermissionLauncher.launch(permission)
+        } else {
+            Log.d("Permissions", "BODY_SENSORS already granted")
         }
     }
 
@@ -90,6 +106,7 @@ fun WearApp(
             MessageText(state = connectionState.value)
 
             val coroutineScope = rememberCoroutineScope()
+            val context = LocalContext.current.applicationContext
 
             LaunchedEffect(Unit) {
                 val job = coroutineScope.launch(Dispatchers.IO) {
@@ -108,10 +125,12 @@ fun WearApp(
                         val client = SocketClient(
                             unityHost = host,
                             unityPort = port,
-                            deviceId = "Watch_001"
-                        ) { state ->
-                            connectionState.value = state
-                        }
+                            deviceId = "Watch_001",
+                            context = context,
+                            onStateChange = { state ->
+                                connectionState.value = state
+                            }
+                        )
                         onClientReady(client)
                         client.start()
                     }
