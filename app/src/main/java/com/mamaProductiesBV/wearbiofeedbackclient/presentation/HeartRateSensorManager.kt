@@ -5,6 +5,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.util.Log
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flow
@@ -16,6 +17,13 @@ class HeartRateSensorManager(private val context: Context) {
 
     private val sensorManager: SensorManager =
         context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+
+    init {
+        val allSensors = sensorManager.getSensorList(Sensor.TYPE_ALL)
+        allSensors.forEach {
+            Log.d("SensorCheck", "Sensor: ${it.name} / Type: ${it.type}")
+        }
+    }
 
     fun streamHeartRate() = callbackFlow<Pair<Int, String>> {
         val heartRateSensor = sensorManager.getDefaultSensor(Sensor.TYPE_HEART_RATE)
